@@ -1,12 +1,12 @@
 import asyncio
 import logging
 import os
-import random
 import aiohttp
-from PIL import Image, ImageDraw
+import random
 from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 from aiogram import Bot, Dispatcher
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, URLInputFile
 
 BOT_TOKEN = "8797652661:AAGHA6BZCf5mNVdxT-5CahP8XmJQ8OKlWFo"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@futboltestjanal")
@@ -19,72 +19,107 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 sent_events = set()
 
-async def download_image(url, session):
+async def download_bytes(url, session):
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status == 200:
                 return await r.read()
     except:
         pass
     return None
 
-async def make_match_image(home, away, home_logo_url, away_logo_url, league, session):
+async def make_match_banner(home, away, home_logo_url, away_logo_url, league, score_home=None, score_away=None, session=None):
     try:
         W, H = 800, 400
-        img = Image.new("RGB", (W, H), color=(15, 23, 42))
+        img = Image.new("RGB", (W, H), color=(10, 15, 30))
         draw = ImageDraw.Draw(img)
 
-        # Yashil maydон chizig'i
-        draw.rectangle([0, H-80, W, H], fill=(20, 83, 45))
-        draw.rectangle([0, H-82, W, H-80], fill=(34, 197, 94))
+        # Gradient background
+        for y in range(H):
+            r = int(10 + (y/H) * 20)
+            g = int(15 + (y/H) * 30)
+            b = int(30 + (y/H) * 60)
+            draw.line([(0,y),(W,y)], fill=(r,g,b))
+
+        # Yashil chiziq pastda
+        draw.rectangle([0, H-8, W, H], fill=(34, 197, 94))
 
         # Uy jamoa logosi
-        if home_logo_url:
-            data = await download_image(home_logo_url, session)
+        if home_logo_url and session:
+            data = await download_bytes(home_logo_url, session)
             if data:
-                logo = Image.open(BytesIO(data)).convert("RGBA").resize((160, 160))
-                img.paste(logo, (80, 100), logo)
+                try:
+                    logo = Image.open(BytesIO(data)).convert("RGBA").resize((150, 150))
+                    img.paste(logo, (60, 90), logo)
+                except:
+                    pass
 
         # Mehmon jamoa logosi
-        if away_logo_url:
-            data = await download_image(away_logo_url, session)
+        if away_logo_url and session:
+            data = await download_bytes(away_logo_url, session)
             if data:
-                logo = Image.open(BytesIO(data)).convert("RGBA").resize((160, 160))
-                img.paste(logo, (560, 100), logo)
+                try:
+                    logo = Image.open(BytesIO(data)).convert("RGBA").resize((150, 150))
+                    img.paste(logo, (590, 90), logo)
+                except:
+                    pass
 
-        # VS yozuvi
-        draw.ellipse([330, 140, 470, 260], fill=(30, 41, 59))
-        draw.text((400, 200), "VS", fill=(255, 255, 255), anchor="mm")
+        # Markaziy doira
+        draw.ellipse([310, 120, 490, 280], fill=(20, 30, 60), outline=(34, 197, 94), width=3)
+
+        # Skor yoki VS
+        if score_home is not None and score_away is not None:
+            draw.text((400, 185), f"{score_home} — {score_away}", fill=(255, 255, 255), anchor="mm")
+        else:
+            draw.text((400, 185), "VS", fill=(255, 255, 255), anchor="mm")
 
         # Jamoalar nomi
-        draw.text((160, 290), home[:12], fill=(255,255,255), anchor="mm")
-        draw.text((640, 290), away[:12], fill=(255,255,255), anchor="mm")
+        home_short = home[:13] if len(home) > 13 else home
+        away_short = away[:13] if len(away) > 13 else away
+        draw.text((135, 270), home_short, fill=(200, 200, 200), anchor="mm")
+        draw.text((665, 270), away_short, fill=(200, 200, 200), anchor="mm")
 
         # Liga nomi
-        draw.text((400, 350), league[:30], fill=(134, 239, 172), anchor="mm")
+        league_short = league[:35] if len(league) > 35 else league
+        draw.rectangle([150, 330, 650, 370], fill=(20, 83, 45))
+        draw.text((400, 350), league_short, fill=(134, 239, 172), anchor="mm")
 
         buf = BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
         return buf.read()
     except Exception as e:
-        log.error(f"Rasm yaratishda xato: {e}")
+        log.error(f"Banner xato: {e}")
         return None
 
-async def get_youtube_goal_video(home, away, session):
+async def get_goal_video(home, away, session):
     try:
-        query = f"{home} vs {away} goal 2025"
-        search_url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
-            text = await r.text()
-        import re
-        ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', text)
-        if ids:
-            return f"https://www.youtube.com/watch?v={ids[0]}"
+        # Scorebat API - bepul gol videolari
+        url = "https://www.scorebat.com/video-api/v3/feed/?token="
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+            if r.status == 200:
+                data = await r.json()
+                videos = data.get("response", [])
+                for v in videos:
+                    title = v.get("title", "").lower()
+                    if home.lower()[:4] in title or away.lower()[:4] in title:
+                        videos_list = v.get("videos", [])
+                        if videos_list:
+                            return videos_list[0].get("embed", "")
     except Exception as e:
-        log.error(f"YouTube xato: {e}")
+        log.error(f"Scorebat xato: {e}")
     return None
+
+async def download_and_send_video(video_url, caption, session):
+    try:
+        data = await download_bytes(video_url, session)
+        if data and len(data) < 50 * 1024 * 1024:  # 50MB limit
+            video_file = BufferedInputFile(data, filename="goal.mp4")
+            await bot.send_video(CHANNEL_ID, video=video_file, caption=caption)
+            return True
+    except Exception as e:
+        log.error(f"Video yuborishda xato: {e}")
+    return False
 
 async def get_live_matches(session):
     if not FOOTBALL_API_KEY:
@@ -112,8 +147,8 @@ async def monitor(session):
         away = teams.get('away', {}).get('name', '')
         home_logo = teams.get('home', {}).get('logo')
         away_logo = teams.get('away', {}).get('logo')
-        home_score = goals.get('home', 0)
-        away_score = goals.get('away', 0)
+        home_score = goals.get('home', 0) or 0
+        away_score = goals.get('away', 0) or 0
         status = fixture.get('status', {}).get('short', '')
         league_name = league.get('name', 'Futbol')
 
@@ -121,11 +156,10 @@ async def monitor(session):
         start_key = f"start_{match_id}"
         if status == '1H' and start_key not in sent_events:
             sent_events.add(start_key)
-            img_data = await make_match_image(home, away, home_logo, away_logo, league_name, session)
             caption = f"🏟️ MATCH BOSHLANDI!\n\n⚽ {home} 🆚 {away}\n🏆 {league_name}\n\nLive kuzating! 👁️"
-            if img_data:
-                photo = BufferedInputFile(img_data, filename="match.png")
-                await bot.send_photo(CHANNEL_ID, photo=photo, caption=caption)
+            img = await make_match_banner(home, away, home_logo, away_logo, league_name, session=session)
+            if img:
+                await bot.send_photo(CHANNEL_ID, photo=BufferedInputFile(img, "match.png"), caption=caption)
             else:
                 await bot.send_message(CHANNEL_ID, caption)
             await asyncio.sleep(2)
@@ -133,34 +167,46 @@ async def monitor(session):
         # Gollar
         for event in events:
             if event.get('type') == 'Goal':
-                player = event.get('player', {}).get('name', 'O\'yinchi')
+                player = event.get('player', {}).get('name', '') or "O'yinchi"
                 team = event.get('team', {}).get('name', home)
                 minute = event.get('time', {}).get('elapsed', 0)
                 extra = event.get('time', {}).get('extra', 0)
-                if not player or player.strip() == '':
-                    player = "O'yinchi"
+                min_str = f"{minute}+{extra}" if extra else str(minute)
 
                 key = f"goal_{match_id}_{player}_{minute}"
                 if key not in sent_events:
                     sent_events.add(key)
-                    min_str = f"{minute}+{extra}" if extra else str(minute)
-                    caption = f"⚽ GOL! {min_str}'\n\n🏃 {player} ({team})\n\n📊 Hisob: {home} {home_score}—{away_score} {away}\n🏆 {league_name}"
+                    caption = f"⚽ GOL! {min_str}'\n\n🏃 {player}\n🆚 {home} {home_score}—{away_score} {away}\n🏆 {league_name}"
 
-                    video_url = await get_youtube_goal_video(home, away, session)
+                    # Avval gol videosini qidiramiz
+                    video_sent = False
+                    video_url = await get_goal_video(home, away, session)
                     if video_url:
-                        caption += f"\n\n🎬 Video: {video_url}"
-                    await bot.send_message(CHANNEL_ID, caption)
+                        video_sent = await download_and_send_video(video_url, caption, session)
+
+                    # Video topilmasa chiroyli banner yuboramiz
+                    if not video_sent:
+                        img = await make_match_banner(
+                            home, away, home_logo, away_logo, league_name,
+                            score_home=home_score, score_away=away_score, session=session
+                        )
+                        if img:
+                            await bot.send_photo(CHANNEL_ID, photo=BufferedInputFile(img, "goal.png"), caption=caption)
+                        else:
+                            await bot.send_message(CHANNEL_ID, caption)
                     await asyncio.sleep(2)
 
         # Match tugadi
         end_key = f"end_{match_id}"
         if status in ['FT', 'AET', 'PEN'] and end_key not in sent_events:
             sent_events.add(end_key)
-            caption = f"🏁 MATCH YAKUNLANDI!\n\n{home} {home_score} — {away_score} {away}\n🏆 {league_name}"
-            img_data = await make_match_image(home, away, home_logo, away_logo, league_name, session)
-            if img_data:
-                photo = BufferedInputFile(img_data, filename="result.png")
-                await bot.send_photo(CHANNEL_ID, photo=photo, caption=caption)
+            caption = f"🏁 YAKUNIY NATIJA!\n\n{home} {home_score} — {away_score} {away}\n🏆 {league_name}"
+            img = await make_match_banner(
+                home, away, home_logo, away_logo, league_name,
+                score_home=home_score, score_away=away_score, session=session
+            )
+            if img:
+                await bot.send_photo(CHANNEL_ID, photo=BufferedInputFile(img, "result.png"), caption=caption)
             else:
                 await bot.send_message(CHANNEL_ID, caption)
             await asyncio.sleep(2)
